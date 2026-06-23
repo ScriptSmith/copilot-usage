@@ -1,0 +1,17 @@
+# Compiled GSettings schemas
+schemas/gschemas.compiled
+
+# Editor backups
+*~
+*.swp
+*.swo
+.*.swp
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+
+# Logs
+*.log

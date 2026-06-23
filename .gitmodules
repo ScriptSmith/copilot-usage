@@ -1,0 +1,3 @@
+[submodule "copilot-usage-cli"]
+	path = copilot-usage-cli
+	url = https://github.com/ScriptSmith/copilot-usage-cli.git

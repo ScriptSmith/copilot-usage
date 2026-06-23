@@ -1,0 +1,21 @@
+.copilot-panel-label {
+    font-size: 11px;
+    /* Keep digits the same width as they tick, so the bar doesn't jiggle */
+    font-feature-settings: "tnum" 1;
+}
+
+/* Section subtitle (e.g. "Recent Sessions") */
+.copilot-section-title {
+    font-weight: bold;
+}
+
+/* Truncate long session labels in the popup so the menu width stays sane */
+.copilot-truncate-label {
+    max-width: 360px;
+}
+
+/* Dim secondary rows */
+.copilot-dim-label {
+    font-size: 0.9em;
+    color: rgba(255, 255, 255, 0.7);
+}

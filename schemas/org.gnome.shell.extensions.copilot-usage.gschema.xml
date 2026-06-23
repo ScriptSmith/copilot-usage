@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.copilot-usage" path="/org/gnome/shell/extensions/copilot-usage/">
+    <key name="refresh-interval" type="i">
+      <default>30</default>
+      <summary>Refresh Interval</summary>
+      <description>How often to rescan session files as a fallback (in seconds). File-change watching is real-time; this just catches anything the watcher misses.</description>
+      <range min="5" max="600"/>
+    </key>
+    <key name="aic-rate" type="d">
+      <default>0.01</default>
+      <summary>AIC Rate</summary>
+      <description>Dollar value of a single AIC. 1 AIC = $0.01 by default.</description>
+      <range min="0" max="100"/>
+    </key>
+  </schema>
+</schemalist>
