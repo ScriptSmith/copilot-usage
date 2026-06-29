@@ -24,7 +24,7 @@ and repository.
 ## Installation
 
 ```bash
-git clone git@github.com:ScriptSmith/copilot-usage.git
+git clone https://github.com/ScriptSmith/copilot-usage.git
 cd copilot-usage
 ./install.sh
 ```
@@ -64,67 +64,25 @@ closes that gap.
 
 ## Live usage (open sessions)
 
-To count open sessions too, Copilot can export per-call usage live over
-OpenTelemetry. The bundled collector captures that into a SQLite database, and
-the CLI and extension merge it with the on-disk totals so a session's spend shows
-up while it is still running. Reconciliation is by session id: a closed session's
-shutdown total is authoritative, an open session's live total is added in, and
-any disagreement between the two is surfaced as an anomaly in the menu.
+To count open sessions too, run the bundled collector, which captures Copilot's
+live OpenTelemetry usage and merges it with the on-disk totals so a session's
+spend shows up while it is still running.
 
-### 1. Install the collector
+Install the collector (a socket-activated systemd user service on
+`127.0.0.1:4318`):
 
 ```bash
 ./collector/install-collector.sh
 ```
 
-This installs a socket-activated systemd user service listening on
-`127.0.0.1:4318`, and writes the env var below. Socket activation means the port
-is always accepting, so Copilot never hits a connection-refused even when the
-collector is idle. It runs as a systemd service rather than from the extension so
-it stays up whenever you use Copilot, including in a plain TTY or while GNOME
-Shell is reloading.
-
-### 2. Point Copilot at it (set the env var)
-
-Copilot reads OTel config only from environment variables, so it has to be set in
-the environment Copilot launches in:
-
-```ini
-OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
-```
-
-Recommended: put it in `~/.config/environment.d/copilot-otel.conf` (the installer
-does this for you). systemd applies it to the whole graphical session at login,
-so every `copilot` you start exports, with no shell-specific setup. It takes
-effect on your next login. Alternatively, `export` it from your shell profile, or
-wrap `copilot` in an alias that sets it.
-
-Already-running Copilot sessions won't export, since OTel binds at startup. Only
-sessions started afterwards will.
-
-### 3. Verify
-
-```bash
-curl -s http://127.0.0.1:4318/healthz
-OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 copilot -p "echo hi" --allow-all
-curl -s http://127.0.0.1:4318/sessions | python3 -m json.tool   # live per-session AIC
-node copilot-usage-cli/copilot-usage.js --collector             # reconciled view
-```
+Point Copilot at it by setting `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318`
+in its environment. The installer writes this to
+`~/.config/environment.d/copilot-otel.conf`, which systemd applies at your next
+login. Sessions already running won't export; only ones started afterwards will.
 
 The extension picks the collector up automatically via its Live collector URL
 setting (default `http://127.0.0.1:4318`; clear it to use on-disk data only).
 Uninstall with `./collector/install-collector.sh --uninstall`.
-
-## Quick check from the terminal
-
-Run the CLI directly to see the JSON the extension consumes:
-
-```bash
-node copilot-usage-cli/copilot-usage.js --json     # or, if installed globally: copilot-usage --json
-```
-
-It also has human-readable output: `copilot-usage`, `copilot-usage sessions`,
-`copilot-usage session <id>`.
 
 ## Troubleshooting
 
