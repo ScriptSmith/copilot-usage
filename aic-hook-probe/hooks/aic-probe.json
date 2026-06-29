@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart":        [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh sessionStart",        "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "userPromptSubmitted": [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh userPromptSubmitted", "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "preToolUse":          [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh preToolUse",          "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "postToolUse":         [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh postToolUse",         "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "postToolUseFailure":  [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh postToolUseFailure",  "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "preCompact":          [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh preCompact",          "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "agentStop":           [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh agentStop",           "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "subagentStart":       [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh subagentStart",       "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "subagentStop":        [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh subagentStop",        "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "errorOccurred":       [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh errorOccurred",       "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "notification":        [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh notification",        "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "sessionEnd":          [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh sessionEnd",          "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }],
+    "permissionRequest":   [{ "type": "command", "bash": "bash /home/adam/src/copilot-usage/aic-hook-probe/aic-probe.sh permissionRequest",   "env": { "AIC_PROBE_LOG_DIR": "/home/adam/src/copilot-usage/aic-hook-probe/logs" }, "timeoutSec": 20 }]
+  }
+}

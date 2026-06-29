@@ -1,0 +1,13 @@
+[Unit]
+Description=Copilot Usage OTLP collector socket
+Documentation=https://github.com/ScriptSmith/copilot-usage-cli
+
+[Socket]
+# Copilot's OTLP/HTTP exporter posts here (OTEL_EXPORTER_OTLP_ENDPOINT).
+# Socket activation means the port is always accepting, so Copilot never sees a
+# connection refused even when the collector process is not yet running; the
+# first POST (or a /sessions query) starts the service on demand.
+ListenStream=127.0.0.1:4318
+
+[Install]
+WantedBy=sockets.target

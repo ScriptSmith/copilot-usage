@@ -1,0 +1,17 @@
+[Unit]
+Description=Copilot Usage OTLP collector
+Documentation=https://github.com/ScriptSmith/copilot-usage-cli
+Requires=copilot-usage-collector.socket
+After=copilot-usage-collector.socket
+
+[Service]
+Type=simple
+# @NODE@ and @SCRIPT@ are filled in by install-collector.sh.
+ExecStart=@NODE@ @SCRIPT@
+Restart=on-failure
+RestartSec=2
+# The collector receives the listening socket from the .socket unit as fd 3.
+NoNewPrivileges=true
+PrivateTmp=true
+
+# No [Install]: the socket pulls this in on demand (socket activation).

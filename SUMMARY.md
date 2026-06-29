@@ -93,6 +93,8 @@ print(f'All-time total: {total:.2f} AIC')
 ## Notes
 
 - The cloud session store (`session_store_sql`) does **not** record AIC or token counts for CLI sessions -- only these local `events.jsonl` files do.
+- AIC is **only** written in `session.shutdown`. There is no incremental per-turn or per-request usage in the log, so a session that ends abnormally (crash, kill, reboot) has no recoverable cost. The `assistant.message` / `function` events carry no token or AIU data (any `aiu` substring there is base64 inside `encryptedContent` / `reasoningOpaque`). Such sessions can be detected (activity but no shutdown event) and dated via the `session.start` event's ISO `startTime`, but their AIC cannot be reconstructed.
+- The working directory, git repository, and branch a session ran in are recorded in the **`session.start`** event at `data.context.cwd` / `data.context.repository` / `data.context.branch` (not in the shutdown event), which is what lets usage be broken down by directory and repository.
 - Sessions still open at the time of querying are excluded (no shutdown event yet).
 - `totalPremiumRequests` in the shutdown event is a rounded integer.
 - The fractional AIC shown by `/usage` is `totalNanoAiu / 1e9`. The `modelMetrics.<model>.requests.cost` field is **not** the AIC on newer sessions (it became the premium-request count); only fall back to it for pre-~2026-06 sessions that lack `totalNanoAiu`.

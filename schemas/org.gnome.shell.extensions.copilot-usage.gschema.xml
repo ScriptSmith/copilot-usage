@@ -13,5 +13,10 @@
       <description>Dollar value of a single AIC. 1 AIC = $0.01 by default.</description>
       <range min="0" max="100"/>
     </key>
+    <key name="collector-url" type="s">
+      <default>'http://127.0.0.1:4318'</default>
+      <summary>Live collector URL</summary>
+      <description>Base URL of the local OTLP usage collector. When set, the extension merges live (still-open) session usage and reconciles it against the on-disk shutdown totals by session id, surfacing any anomalies. Leave empty to disable and use on-disk data only.</description>
+    </key>
   </schema>
 </schemalist>

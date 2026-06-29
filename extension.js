@@ -17,6 +17,12 @@ const RECENT_SUBDIR_MS = 2 * 24 * 60 * 60 * 1000; // watch subdirs modified with
 const SESSION_DIR = GLib.build_filenamev([GLib.get_home_dir(), '.copilot', 'session-state']);
 const DEBUG = false;
 
+// Time buckets, matching the CLI's `periods`. Each is a top-level submenu whose
+// title shows the period total and which nests Sessions/Models/Directories/Repositories.
+const PERIODS = ['today', 'week', 'month', 'all'];
+const PERIOD_LABELS = { today: 'Today', week: 'This week', month: 'This month', all: 'All time' };
+const MAX_MENU_ROWS = 15; // cap rows per (sub)menu; show "... N more" beyond this
+
 const CopilotUsageIndicator = GObject.registerClass(
 class CopilotUsageIndicator extends PanelMenu.Button {
     _init(extension) {
@@ -67,28 +73,48 @@ class CopilotUsageIndicator extends PanelMenu.Button {
         header.label.add_style_class_name('copilot-section-title');
         this.menu.addMenuItem(header);
 
-        this._todayItem = new PopupMenu.PopupMenuItem('Today: $--');
-        this._todayItem.setSensitive(false);
-        this.menu.addMenuItem(this._todayItem);
+        // One submenu per period (Today / This week / This month / All time). The
+        // title carries the period total; inside, nested submenus break that total
+        // down by Sessions, Models, Directories, and Repositories.
+        this._periodMenus = {};
+        for (const key of PERIODS) {
+            const root = new PopupMenu.PopupSubMenuMenuItem(`${PERIOD_LABELS[key]}: $--`);
+            const sessions = new PopupMenu.PopupSubMenuMenuItem('Sessions');
+            const models = new PopupMenu.PopupSubMenuMenuItem('Models');
+            const directories = new PopupMenu.PopupSubMenuMenuItem('Directories');
+            const repositories = new PopupMenu.PopupSubMenuMenuItem('Repositories');
+            root.menu.addMenuItem(sessions);
+            root.menu.addMenuItem(models);
+            root.menu.addMenuItem(directories);
+            root.menu.addMenuItem(repositories);
+            this.menu.addMenuItem(root);
+            this._makeNestable(root, [sessions, models, directories, repositories]);
+            this._periodMenus[key] = { root, sessions, models, directories, repositories };
+        }
 
-        this._weekItem = new PopupMenu.PopupMenuItem('This week: $--');
-        this._weekItem.setSensitive(false);
-        this.menu.addMenuItem(this._weekItem);
-
-        this._monthItem = new PopupMenu.PopupMenuItem('This month: $--');
-        this._monthItem.setSensitive(false);
-        this.menu.addMenuItem(this._monthItem);
-
-        this._allItem = new PopupMenu.PopupMenuItem('All time: $--');
-        this._allItem.setSensitive(false);
-        this.menu.addMenuItem(this._allItem);
+        // Sessions that ended abnormally (crash/kill/reboot) or are still open
+        // never wrote a shutdown event, so their usage is uncounted. A submenu so
+        // they can be inspected; the title warns only about recent ones (older are
+        // listed but dimmed). Hidden when there are none.
+        this._incompleteMenu = new PopupMenu.PopupSubMenuMenuItem('Incomplete sessions');
+        this._incompleteMenu.visible = false;
+        this.menu.addMenuItem(this._incompleteMenu);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        this._todayMenu = new PopupMenu.PopupSubMenuMenuItem("Today's Sessions");
-        this.menu.addMenuItem(this._todayMenu);
+        // Reconciliation anomalies (collector vs on-disk shutdown). Hidden at zero.
+        this._anomaliesMenu = new PopupMenu.PopupSubMenuMenuItem('Anomalies');
+        this._anomaliesMenu.visible = false;
+        this.menu.addMenuItem(this._anomaliesMenu);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        // Live-collector status line. Hidden until we know one way or the other.
+        this._collectorItem = new PopupMenu.PopupMenuItem('');
+        this._collectorItem.setSensitive(false);
+        this._collectorItem.label.add_style_class_name('copilot-dim-label');
+        this._collectorItem.visible = false;
+        this.menu.addMenuItem(this._collectorItem);
 
         this._lastUpdatedItem = new PopupMenu.PopupMenuItem('Last updated: --');
         this._lastUpdatedItem.setSensitive(false);
@@ -106,6 +132,36 @@ class CopilotUsageIndicator extends PanelMenu.Button {
             this._extension.openPreferences();
         });
         this.menu.addMenuItem(settingsItem);
+    }
+
+    // Make `children` (facet submenus) openable *inside* `parentItem` (a period
+    // submenu) without collapsing it. GNOME tracks only one open submenu per top
+    // menu: when a child opens it asks `_getTopMenu()._setOpenedSubMenu(child)`,
+    // which closes the previously-open submenu -- the parent. We give the parent
+    // submenu its own opened-child tracking and redirect the children's
+    // `_getTopMenu()` to it, so opening a facet closes only a sibling facet, never
+    // the parent. The parent's own open/close is still tracked by the real top
+    // menu, so opening another period still closes this one.
+    _makeNestable(parentItem, children) {
+        const parentMenu = parentItem.menu; // a PopupSubMenu (extends PopupMenuBase)
+        parentMenu._openedSubMenu = null;
+        parentMenu._setOpenedSubMenu = (submenu) => {
+            if (parentMenu._openedSubMenu)
+                parentMenu._openedSubMenu.close(true);
+            parentMenu._openedSubMenu = submenu;
+        };
+        for (const child of children) {
+            child._getTopMenu = () => parentMenu;
+        }
+        // When the period collapses, close whichever facet was open so reopening
+        // starts clean (PopupSubMenu only emits open-state-changed, so the facets'
+        // own menu-closed wiring never fires here).
+        parentMenu.connect('open-state-changed', (_m, open) => {
+            if (!open && parentMenu._openedSubMenu) {
+                parentMenu._openedSubMenu.close(false);
+                parentMenu._openedSubMenu = null;
+            }
+        });
     }
 
     // --- File watching ---------------------------------------------------
@@ -220,10 +276,19 @@ class CopilotUsageIndicator extends PanelMenu.Button {
         }
         this._scanning = true;
 
+        // Sourcing: the bundled CLI reads the on-disk session logs (authoritative,
+        // billed totals) and -- when a collector URL is configured -- also fetches
+        // the live OTLP feed and reconciles the two by session id, returning live
+        // totals (*_aic_live), open sessions, and any anomalies. Reconciliation
+        // lives in the CLI because only it has the complete on-disk session set.
+        const argv = [this._nodePath, this._scriptPath, '--json'];
+        const collectorUrl = (this._settings.get_string('collector-url') || '').trim();
+        if (collectorUrl) argv.push(`--collector=${collectorUrl}`);
+
         let proc;
         try {
             proc = Gio.Subprocess.new(
-                [this._nodePath, this._scriptPath, '--json'],
+                argv,
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
             );
         } catch (e) {
@@ -270,43 +335,218 @@ class CopilotUsageIndicator extends PanelMenu.Button {
     _updateDisplay() {
         if (!this._data) return;
 
-        const today = this._dollars(this._data.today_aic);
-        const week = this._dollars(this._data.week_aic);
+        const d = this._data;
+        const live = !!(d.collector && d.collector.connected);
 
-        this._panelLabel.set_text(`D: ${today}  W: ${week}`);
+        // Panel shows today + this week. Prefer live-adjusted totals (on-disk +
+        // open sessions) when the collector is connected; else on-disk-only.
+        const todayAic = live ? d.today_aic_live : d.today_aic;
+        const weekAic = live ? d.week_aic_live : d.week_aic;
+        this._panelLabel.set_text(`D: ${this._dollars(todayAic)}  W: ${this._dollars(weekAic)}`);
 
-        this._todayItem.label.set_text(`Today: ${today}`);
-        this._weekItem.label.set_text(`This week: ${week}`);
-        this._monthItem.label.set_text(`This month: ${this._dollars(this._data.month_aic)}`);
-        this._allItem.label.set_text(`All time: ${this._dollars(this._data.all_aic)}`);
-
-        this._updateTodayMenu();
+        this._updatePeriods();
+        this._updateIncomplete();
+        this._updateAnomalies();
+        this._updateCollectorStatus();
         this._updateLastUpdatedLabel();
     }
 
-    _updateTodayMenu() {
-        this._todayMenu.menu.removeAll();
-        const today = this._data?.today_sessions || [];
-
-        if (today.length === 0) {
-            const empty = new PopupMenu.PopupMenuItem('No sessions today');
-            empty.setSensitive(false);
-            this._todayMenu.menu.addMenuItem(empty);
-        } else {
-            for (const s of today) {
-                const when = this._formatWhen(s.start_ms);
-                const id8 = (s.id || '').slice(0, 8);
-                const item = new PopupMenu.PopupMenuItem(
-                    `${this._dollars(s.aic)}  ${id8}  ${when}  (${s.total_messages} msg, ${s.tool_calls} tools)`
-                );
-                item.setSensitive(false);
-                item.label.add_style_class_name('copilot-truncate-label');
-                item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
-                this._todayMenu.menu.addMenuItem(item);
-            }
+    _updateAnomalies() {
+        const anomalies = this._data?.anomalies || [];
+        this._anomaliesMenu.menu.removeAll();
+        if (!anomalies.length) {
+            this._anomaliesMenu.visible = false;
+            return;
         }
+        this._anomaliesMenu.visible = true;
+        // Warn (⚠ + count) only about recent anomalies; older ones are still
+        // listed (dimmed) so they can be inspected without nagging.
+        const recent = anomalies.filter(a => a.recent).length;
+        this._anomaliesMenu.label.set_text(recent > 0
+            ? `⚠ Anomalies (${recent})`
+            : `Anomalies (${anomalies.length})`);
+        for (const a of anomalies.slice(0, 20)) {
+            const id8 = (a.id || '').slice(0, 8);
+            let text;
+            if (a.type === 'mismatch') {
+                text = `${id8}: live ${a.collector_aic} vs shutdown ${a.shutdown_aic} AIC (Δ${a.diff})`;
+            } else if (a.type === 'orphan') {
+                text = `${id8}: collector ${a.collector_aic} AIC but no session log`;
+            } else {
+                text = `${id8}: ${a.type}`;
+            }
+            const item = new PopupMenu.PopupMenuItem(text);
+            item.setSensitive(false);
+            item.label.add_style_class_name('copilot-truncate-label');
+            if (!a.recent) item.label.add_style_class_name('copilot-dim-label');
+            item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+            this._anomaliesMenu.menu.addMenuItem(item);
+        }
+    }
 
-        this._todayMenu.label.set_text(`Today's Sessions (${today.length})`);
+    _updateIncomplete() {
+        const d = this._data || {};
+        const list = d.incomplete_sessions || [];
+        this._incompleteMenu.menu.removeAll();
+        if (!list.length) {
+            this._incompleteMenu.visible = false;
+            return;
+        }
+        this._incompleteMenu.visible = true;
+        const recent = (d.incomplete_recent_count != null)
+            ? d.incomplete_recent_count
+            : list.filter(s => s.recent).length;
+        // Show the recent count when some are recent; otherwise a quieter title
+        // so old ones can still be inspected without nagging.
+        this._incompleteMenu.label.set_text(recent > 0
+            ? `${recent} incomplete session${recent === 1 ? '' : 's'}`
+            : `Incomplete sessions (${list.length})`);
+        for (const s of list.slice(0, MAX_MENU_ROWS)) {
+            const id8 = (s.id || '').slice(0, 8);
+            const item = new PopupMenu.PopupMenuItem(
+                `${id8}  ${this._formatWhen(s.start_ms)}  (${s.total_messages} msg, ${s.tool_calls} tools)`);
+            item.setSensitive(false);
+            item.label.add_style_class_name('copilot-truncate-label');
+            if (!s.recent) item.label.add_style_class_name('copilot-dim-label');
+            item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+            this._incompleteMenu.menu.addMenuItem(item);
+        }
+        this._addMoreRow(this._incompleteMenu, list.length);
+    }
+
+    _updateCollectorStatus() {
+        const c = this._data?.collector;
+        if (!c) {
+            this._collectorItem.visible = false;
+            return;
+        }
+        this._collectorItem.visible = true;
+        if (c.connected) {
+            const open = this._data.live_session_count || 0;
+            const openTxt = open ? `, ${open} open` : '';
+            this._collectorItem.label.set_text(
+                `Collector: live (${c.session_count} tracked${openTxt})`);
+        } else {
+            this._collectorItem.label.set_text('Collector: offline (on-disk totals only)');
+        }
+    }
+
+    // Refresh every period submenu (title total + the nested Sessions / Models /
+    // Directories / Repositories groupings) from the CLI's `periods` array.
+    _updatePeriods() {
+        const d = this._data || {};
+        const live = !!(d.collector && d.collector.connected);
+        const byPeriod = {};
+        for (const p of (d.periods || [])) byPeriod[p.period] = p;
+
+        for (const key of PERIODS) {
+            const refs = this._periodMenus[key];
+            if (!refs) continue;
+            const p = byPeriod[key];
+            if (!p) {
+                refs.root.label.set_text(`${PERIOD_LABELS[key]}: $--`);
+                continue;
+            }
+
+            // Prefer the live-adjusted total when the collector is connected, and
+            // note the live delta in the title.
+            const baseAic = p.aic || 0;
+            const liveAic = (live && typeof p.aic_live === 'number') ? p.aic_live : baseAic;
+            const suffix = (live && liveAic > baseAic)
+                ? `  (+${this._dollars(liveAic - baseAic)} live)` : '';
+            refs.root.label.set_text(`${p.label}: ${this._dollars(liveAic)}${suffix}`);
+
+            this._fillSessionsMenu(refs.sessions, p.sessions);
+            this._fillDimensionMenu(refs.models, 'Models', p.models,
+                m => `${this._dollars(m.aic)}  ${m.model}  (${m.requests} req)`,
+                Pango.EllipsizeMode.END);
+            this._fillDimensionMenu(refs.directories, 'Directories', p.directories,
+                dir => {
+                    const s = dir.sessions === 1 ? '' : 's';
+                    return `${this._dollars(dir.aic)}  ${this._shortDir(dir.dir)}  (${dir.sessions} session${s})`;
+                },
+                // MIDDLE keeps both the cost (start) and the project dir (end) visible.
+                Pango.EllipsizeMode.MIDDLE);
+            this._fillDimensionMenu(refs.repositories, 'Repositories', p.repositories,
+                r => {
+                    const n = (r.branches || []).length;
+                    const branch = n === 1 ? r.branches[0].branch : `${n} branches`;
+                    return `${this._dollars(r.aic)}  ${r.repo}  (${branch})`;
+                },
+                Pango.EllipsizeMode.END);
+        }
+    }
+
+    // Collapse the home dir to ~ so directory rows stay readable.
+    _shortDir(p) {
+        if (!p) return '(unknown)';
+        const home = GLib.get_home_dir();
+        if (p === home) return '~';
+        if (p.startsWith(home + '/')) return '~' + p.slice(home.length);
+        return p;
+    }
+
+    // Disabled, dim "(none)" placeholder for an empty (sub)menu.
+    _addEmptyRow(submenu) {
+        const empty = new PopupMenu.PopupMenuItem('(none)');
+        empty.setSensitive(false);
+        empty.label.add_style_class_name('copilot-dim-label');
+        submenu.menu.addMenuItem(empty);
+    }
+
+    // "... and N more" footer when a list is capped at MAX_MENU_ROWS.
+    _addMoreRow(submenu, total) {
+        if (total <= MAX_MENU_ROWS) return;
+        const more = new PopupMenu.PopupMenuItem(`... and ${total - MAX_MENU_ROWS} more`);
+        more.setSensitive(false);
+        more.label.add_style_class_name('copilot-dim-label');
+        submenu.menu.addMenuItem(more);
+    }
+
+    _fillSessionsMenu(submenu, sessions) {
+        submenu.menu.removeAll();
+        const list = sessions || [];
+        submenu.label.set_text(`Sessions (${list.length})`);
+        if (!list.length) {
+            this._addEmptyRow(submenu);
+            return;
+        }
+        for (const s of list.slice(0, MAX_MENU_ROWS)) {
+            const when = this._formatWhen(s.start_ms);
+            const id8 = (s.id || '').slice(0, 8);
+            // Live (still-open) sessions come from the collector and have no
+            // message/tool counts yet; mark them and skip the (msg, tools) tail.
+            const detail = s.live
+                ? `  ${s.running ? '● live' : 'open'}`
+                : `  (${s.total_messages} msg, ${s.tool_calls} tools)`;
+            const item = new PopupMenu.PopupMenuItem(
+                `${this._dollars(s.aic)}  ${id8}  ${when}${detail}`);
+            item.setSensitive(false);
+            item.label.add_style_class_name('copilot-truncate-label');
+            item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+            submenu.menu.addMenuItem(item);
+        }
+        this._addMoreRow(submenu, list.length);
+    }
+
+    // Populate a dimension submenu (Models / Directories / Repositories) for a
+    // period. Rows are display-only; long labels ellipsize per ellipsizeMode.
+    _fillDimensionMenu(submenu, title, items, rowText, ellipsizeMode) {
+        submenu.menu.removeAll();
+        const list = items || [];
+        submenu.label.set_text(`${title} (${list.length})`);
+        if (!list.length) {
+            this._addEmptyRow(submenu);
+            return;
+        }
+        for (const it of list.slice(0, MAX_MENU_ROWS)) {
+            const item = new PopupMenu.PopupMenuItem(rowText(it));
+            item.setSensitive(false);
+            item.label.add_style_class_name('copilot-truncate-label');
+            item.label.clutter_text.set_ellipsize(ellipsizeMode);
+            submenu.menu.addMenuItem(item);
+        }
+        this._addMoreRow(submenu, list.length);
     }
 
     _updateLastUpdatedLabel() {
@@ -335,14 +575,14 @@ class CopilotUsageIndicator extends PanelMenu.Button {
         try {
             const date = new Date(startMs);
             const now = new Date();
-            const hh = date.getHours().toString().padStart(2, '0');
-            const mm = date.getMinutes().toString().padStart(2, '0');
-            const time = `${hh}:${mm}`;
-            if (date.toDateString() === now.toDateString()) {
-                return time;
-            }
-            const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            return `${days[date.getDay()]} ${time}`;
+            const p2 = n => n.toString().padStart(2, '0');
+            const time = `${p2(date.getHours())}:${p2(date.getMinutes())}`;
+            // Same day: time only. Periods can span months/years, so older
+            // sessions need a date: MM-DD this year, YYYY-MM-DD otherwise.
+            if (date.toDateString() === now.toDateString()) return time;
+            const md = `${p2(date.getMonth() + 1)}-${p2(date.getDate())}`;
+            if (date.getFullYear() === now.getFullYear()) return `${md} ${time}`;
+            return `${date.getFullYear()}-${md}`;
         } catch (e) {
             return '';
         }
