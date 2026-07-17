@@ -13,6 +13,7 @@ import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const DEFAULT_REFRESH_INTERVAL = 30; // seconds (fallback rescan)
 const DEBOUNCE_MS = 600; // coalesce bursts of file-change events
+const MIN_EVENT_SCAN_GAP_MS = 10 * 1000; // floor between file-triggered rescans
 const RECENT_SUBDIR_MS = 2 * 24 * 60 * 60 * 1000; // watch subdirs modified within 2 days
 const SESSION_DIR = GLib.build_filenamev([GLib.get_home_dir(), '.copilot', 'session-state']);
 const DEBUG = false;
@@ -43,9 +44,11 @@ class CopilotUsageIndicator extends PanelMenu.Button {
         this._debounceTimeoutId = null;
         this._scanning = false;
         this._rescanPending = false;
+        this._lastScanStartMs = -Infinity;
+        this._menuDirty = false;
 
         this._dirMonitor = null;
-        this._subdirMonitors = new Map(); // path -> Gio.FileMonitor
+        this._subdirMonitors = new Map(); // path -> { monitor, lastActiveMs }
 
         // Panel label: "D: $x.xx  W: $y.yy"
         this._box = new St.BoxLayout({
@@ -61,6 +64,14 @@ class CopilotUsageIndicator extends PanelMenu.Button {
         this._box.add_child(this._panelLabel);
 
         this._buildMenu();
+
+        // Menu contents rebuild lazily: scans that complete while the menu is
+        // closed just mark it dirty, and it refreshes on open.
+        this.menu.connect('open-state-changed', (_menu, open) => {
+            if (open && this._menuDirty) {
+                this._refreshMenuContents();
+            }
+        });
 
         this._setupMonitors();
         this._startTimers();
@@ -218,14 +229,14 @@ class CopilotUsageIndicator extends PanelMenu.Button {
                         continue;
                     }
                     const child = dir.get_child(info.get_name());
-                    this._addSubdirMonitor(child.get_path());
+                    this._addSubdirMonitor(child.get_path(), mtimeMs);
                 }
                 enumerator.close_async(GLib.PRIORITY_DEFAULT, null, null);
             }
         );
     }
 
-    _addSubdirMonitor(path) {
+    _addSubdirMonitor(path, lastActiveMs = null) {
         if (!path || this._subdirMonitors.has(path)) {
             return;
         }
@@ -235,10 +246,26 @@ class CopilotUsageIndicator extends PanelMenu.Button {
                 return;
             }
             const monitor = file.monitor_directory(Gio.FileMonitorFlags.NONE, null);
-            monitor.connect('changed', () => this._queueScan());
-            this._subdirMonitors.set(path, monitor);
+            const entry = { monitor, lastActiveMs: lastActiveMs ?? GLib.get_real_time() / 1000 };
+            monitor.connect('changed', () => {
+                entry.lastActiveMs = GLib.get_real_time() / 1000;
+                this._queueScan();
+            });
+            this._subdirMonitors.set(path, entry);
         } catch (e) {
             if (DEBUG) console.error('Copilot Usage: failed to monitor subdir', path, e);
+        }
+    }
+
+    // Drop monitors for session dirs that have gone quiet; without this they
+    // accumulate for every session ever started during the shell session.
+    _pruneSubdirMonitors() {
+        const now = GLib.get_real_time() / 1000;
+        for (const [path, entry] of this._subdirMonitors) {
+            if (now - entry.lastActiveMs > RECENT_SUBDIR_MS) {
+                entry.monitor.cancel();
+                this._subdirMonitors.delete(path);
+            }
         }
     }
 
@@ -246,7 +273,13 @@ class CopilotUsageIndicator extends PanelMenu.Button {
         if (this._debounceTimeoutId) {
             return;
         }
-        this._debounceTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, DEBOUNCE_MS, () => {
+        // Debounce bursts, and keep file-triggered rescans from running more
+        // often than MIN_EVENT_SCAN_GAP_MS: session logs append constantly
+        // while a session is live, and every scan spawns a node process.
+        const now = GLib.get_monotonic_time() / 1000;
+        const sinceLast = now - this._lastScanStartMs;
+        const delay = Math.max(DEBOUNCE_MS, MIN_EVENT_SCAN_GAP_MS - sinceLast);
+        this._debounceTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
             this._debounceTimeoutId = null;
             this._scan();
             return GLib.SOURCE_REMOVE;
@@ -258,6 +291,7 @@ class CopilotUsageIndicator extends PanelMenu.Button {
     _startTimers() {
         const interval = this._settings.get_int('refresh-interval') || DEFAULT_REFRESH_INTERVAL;
         this._refreshTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, interval, () => {
+            this._pruneSubdirMonitors();
             this._scan();
             return GLib.SOURCE_CONTINUE;
         });
@@ -275,6 +309,7 @@ class CopilotUsageIndicator extends PanelMenu.Button {
             return;
         }
         this._scanning = true;
+        this._lastScanStartMs = GLib.get_monotonic_time() / 1000;
 
         // Sourcing: the bundled CLI reads the on-disk session logs (authoritative,
         // billed totals) and -- when a collector URL is configured -- also fetches
@@ -316,7 +351,7 @@ class CopilotUsageIndicator extends PanelMenu.Button {
 
             if (this._rescanPending) {
                 this._rescanPending = false;
-                this._scan();
+                this._queueScan();
             }
         });
     }
@@ -344,11 +379,24 @@ class CopilotUsageIndicator extends PanelMenu.Button {
         const weekAic = live ? d.week_aic_live : d.week_aic;
         this._panelLabel.set_text(`D: ${this._dollars(todayAic)}  W: ${this._dollars(weekAic)}`);
 
+        this._updateLastUpdatedLabel();
+
+        // Rebuilding the menu means destroying and recreating a few hundred
+        // actors, so only do it while the menu is visible; otherwise flag it
+        // for the next open.
+        if (this.menu.isOpen) {
+            this._refreshMenuContents();
+        } else {
+            this._menuDirty = true;
+        }
+    }
+
+    _refreshMenuContents() {
+        this._menuDirty = false;
         this._updatePeriods();
         this._updateIncomplete();
         this._updateAnomalies();
         this._updateCollectorStatus();
-        this._updateLastUpdatedLabel();
     }
 
     _updateAnomalies() {
@@ -611,8 +659,8 @@ class CopilotUsageIndicator extends PanelMenu.Button {
             this._dirMonitor.cancel();
             this._dirMonitor = null;
         }
-        for (const monitor of this._subdirMonitors.values()) {
-            monitor.cancel();
+        for (const entry of this._subdirMonitors.values()) {
+            entry.monitor.cancel();
         }
         this._subdirMonitors.clear();
         super.destroy();
