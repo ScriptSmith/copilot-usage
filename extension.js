@@ -443,19 +443,21 @@ class CopilotUsageIndicator extends PanelMenu.Button {
         this._incompleteMenu.visible = true;
         const recent = (d.incomplete_recent_count != null)
             ? d.incomplete_recent_count
-            : list.filter(s => s.recent).length;
+            : list.filter(s => s.recent && !s.open).length;
         // Show the recent count when some are recent; otherwise a quieter title
-        // so old ones can still be inspected without nagging.
+        // so old ones can still be inspected without nagging. Open sessions
+        // aren't counted as recent: they record their usage when they exit.
         this._incompleteMenu.label.set_text(recent > 0
             ? `${recent} incomplete session${recent === 1 ? '' : 's'}`
             : `Incomplete sessions (${list.length})`);
         for (const s of list.slice(0, MAX_MENU_ROWS)) {
             const id8 = (s.id || '').slice(0, 8);
+            const status = s.open ? '  open' : '';
             const item = new PopupMenu.PopupMenuItem(
-                `${id8}  ${this._formatWhen(s.start_ms)}  (${s.total_messages} msg, ${s.tool_calls} tools)`);
+                `${id8}  ${this._formatWhen(s.start_ms)}  (${s.total_messages} msg, ${s.tool_calls} tools)${status}`);
             item.setSensitive(false);
             item.label.add_style_class_name('copilot-truncate-label');
-            if (!s.recent) item.label.add_style_class_name('copilot-dim-label');
+            if (!s.recent || s.open) item.label.add_style_class_name('copilot-dim-label');
             item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
             this._incompleteMenu.menu.addMenuItem(item);
         }
@@ -470,7 +472,7 @@ class CopilotUsageIndicator extends PanelMenu.Button {
         }
         this._collectorItem.visible = true;
         if (c.connected) {
-            const open = this._data.live_session_count || 0;
+            const open = this._data.open_session_count || 0;
             const openTxt = open ? `, ${open} open` : '';
             this._collectorItem.label.set_text(
                 `Collector: live (${c.session_count} tracked${openTxt})`);
@@ -562,11 +564,13 @@ class CopilotUsageIndicator extends PanelMenu.Button {
         for (const s of list.slice(0, MAX_MENU_ROWS)) {
             const when = this._formatWhen(s.start_ms);
             const id8 = (s.id || '').slice(0, 8);
-            // Live (still-open) sessions come from the collector and have no
-            // message/tool counts yet; mark them and skip the (msg, tools) tail.
-            const detail = s.live
-                ? `  ${s.running ? '● live' : 'open'}`
-                : `  (${s.total_messages} msg, ${s.tool_calls} tools)`;
+            // Live sessions have usage the collector saw but no shutdown event has
+            // recorded yet: still running, open but idle, or ended without one
+            // (crash, kill, reboot) and recovered from the collector.
+            let detail = `  (${s.total_messages} msg, ${s.tool_calls} tools)`;
+            if (s.live) {
+                detail = s.running ? '  ● live' : s.open ? '  open' : '  recovered';
+            }
             const item = new PopupMenu.PopupMenuItem(
                 `${this._dollars(s.aic)}  ${id8}  ${when}${detail}`);
             item.setSensitive(false);

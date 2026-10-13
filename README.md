@@ -58,9 +58,10 @@ converting to dollars at 1 AIC = $0.01 (configurable).
 
 Copilot only records a session's usage when it closes, so open sessions don't
 count until they exit, and a session that crashes or is killed never records its
-cost. The extension flags these as incomplete and shows a count so you know some
-usage went uncounted. The optional [live collector](#live-usage-open-sessions)
-closes that gap.
+cost. The extension lists these under Incomplete sessions, marks the ones still
+open, and warns with a count only for recent ones that ended without recording
+their usage. The optional [live collector](#live-usage-open-sessions) closes that
+gap.
 
 ## Live usage (open sessions)
 
@@ -82,6 +83,10 @@ login. Sessions already running won't export; only ones started afterwards will.
 
 The extension picks the collector up automatically via its Live collector URL
 setting (default `http://127.0.0.1:4318`; clear it to use on-disk data only).
+In each period's Sessions list, sessions with usage not yet in a shutdown event
+are marked `● live` (a model call in the last five minutes), `open` (a Copilot
+process still has the session open), or `recovered` (it ended without a shutdown
+event, so the collector is the only record of its usage).
 Uninstall with `./collector/install-collector.sh --uninstall`.
 
 ## Troubleshooting
