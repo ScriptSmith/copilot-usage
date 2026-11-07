@@ -3,6 +3,6 @@
   "name": "Copilot Usage",
   "description": "Shows a running total of GitHub Copilot CLI usage (today and this week, in $) in the top bar",
   "version": 2,
-  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
   "settings-schema": "org.gnome.shell.extensions.copilot-usage"
 }
